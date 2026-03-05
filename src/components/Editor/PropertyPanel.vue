@@ -17,6 +17,7 @@ const selectedElement = computed(() => {
 
 const isTextElement = computed(() => selectedElement.value?.type === 'text');
 const isCarouselElement = computed(() => selectedElement.value?.type === 'carousel');
+const isFlexElement = computed(() => selectedElement.value?.type === 'flex');
 
 function updateProp(key: string, value: any) {
   if (!selectedElement.value) return;
@@ -99,6 +100,8 @@ function handleLabelDrag(e: MouseEvent, key: string, isStyle = false, scale = 1)
            // When dragging specific corner, update ONLY that corner
            updateStyle(key, pxValue);
         }
+      } else if (key === 'gap') {
+        updateStyle(key, Math.max(0, newValue) + 'px');
       } else {
         updateStyle(key, newValue);
       }
@@ -165,6 +168,65 @@ function openColorPicker(e: MouseEvent) {
         <div class="input-group">
           <span class="label draggable" @mousedown="e => handleLabelDrag(e, 'height')">H</span>
           <input type="number" :value="Math.round(selectedElement.height)" @change="e => updateProp('height', +(e.target as HTMLInputElement).value)" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Flex Settings -->
+    <div class="panel-section" v-if="isFlexElement">
+      <div class="section-title">Flex 布局</div>
+      
+      <div class="row">
+        <div class="input-group">
+          <span class="label">方向</span>
+          <select :value="selectedElement.style.flexDirection || 'row'" @change="e => updateStyle('flexDirection', (e.target as HTMLSelectElement).value)" class="font-select">
+            <option value="row">水平 (Row)</option>
+            <option value="column">垂直 (Column)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="input-group">
+          <span class="label">主轴</span>
+          <select :value="selectedElement.style.justifyContent || 'flex-start'" @change="e => updateStyle('justifyContent', (e.target as HTMLSelectElement).value)" class="font-select">
+            <option value="flex-start">起点 (Start)</option>
+            <option value="center">居中 (Center)</option>
+            <option value="flex-end">终点 (End)</option>
+            <option value="space-between">两端 (Between)</option>
+            <option value="space-around">环绕 (Around)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="input-group">
+          <span class="label">交叉轴</span>
+          <select :value="selectedElement.style.alignItems || 'flex-start'" @change="e => updateStyle('alignItems', (e.target as HTMLSelectElement).value)" class="font-select">
+            <option value="flex-start">起点 (Start)</option>
+            <option value="center">居中 (Center)</option>
+            <option value="flex-end">终点 (End)</option>
+            <option value="stretch">拉伸 (Stretch)</option>
+          </select>
+        </div>
+      </div>
+      
+      <div class="row grid-2">
+        <div class="input-group">
+          <span class="label">换行</span>
+          <select :value="selectedElement.style.flexWrap || 'nowrap'" @change="e => updateStyle('flexWrap', (e.target as HTMLSelectElement).value)" class="font-select">
+            <option value="nowrap">不换行</option>
+            <option value="wrap">换行</option>
+          </select>
+        </div>
+        <div class="input-group">
+          <span class="label draggable" @mousedown="e => handleLabelDrag(e, 'gap', true)">间距</span>
+          <input type="text" :value="selectedElement.style.gap || '0px'" @change="e => {
+            const val = (e.target as HTMLInputElement).value;
+            // Auto-append px if only number
+            const newVal = /^\d+$/.test(val) ? val + 'px' : val;
+            updateStyle('gap', newVal);
+          }" />
         </div>
       </div>
     </div>

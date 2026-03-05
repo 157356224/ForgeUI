@@ -39,9 +39,7 @@ onUnmounted(() => {
 </template>
 
 <style>
-* {
-  /* cursor: url('/指针.cur'), auto !important; */
-}
+
 
 body {
   margin: 0;

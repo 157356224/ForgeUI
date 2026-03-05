@@ -4,7 +4,7 @@ import { ref } from 'vue';
 export interface EditorElement {
   id: string;
   name: string;
-  type: 'frame' | 'rect' | 'text' | 'image' | 'carousel';
+  type: 'frame' | 'rect' | 'text' | 'image' | 'carousel' | 'flex';
   x: number;
   y: number;
   width: number;
@@ -49,6 +49,9 @@ export const useEditorStore = defineStore('editor', () => {
   const hoveredElementId = ref<string | null>(null);
   const isResizing = ref(false); // Flag to prevent dragging during resize
   const mouseDownOnElement = ref(false); // Track if mouse was pressed on an element
+  
+  // Alignment Guides State (Shared)
+  const alignmentGuides = ref<any[]>([]); // Using any for SnapGuide interface to avoid circular dependency issues if not imported
 
   // History State
   const history = ref<string[]>([]);
@@ -311,19 +314,11 @@ export const useEditorStore = defineStore('editor', () => {
     } else {
       if (newParent) {
         if (isDifferentParent) {
-          // Center the element in the new parent frame
-          // Frame center point: (newParent.width / 2, newParent.height / 2)
-          // Element center point should be at: (dragElement.x + dragElement.width / 2, dragElement.y + dragElement.height / 2)
-          // So: dragElement.x + dragElement.width / 2 = newParent.width / 2
-          // Therefore: dragElement.x = newParent.width / 2 - dragElement.width / 2
-          dragElement.x = (newParent.width - dragElement.width) / 2;
-          dragElement.y = (newParent.height - dragElement.height) / 2;
+          // Calculate new local coordinates relative to the new parent
+          const newParentGlobal = getGlobalPosition(newParent);
           
-          console.log('Centering element:', {
-            elementSize: { w: dragElement.width, h: dragElement.height },
-            parentSize: { w: newParent.width, h: newParent.height },
-            newPosition: { x: dragElement.x, y: dragElement.y }
-          });
+          dragElement.x = dragGlobal.x - newParentGlobal.x;
+          dragElement.y = dragGlobal.y - newParentGlobal.y;
         } else {
           // Same parent - maintain position
           // Calculate new parent's global coordinates
@@ -397,17 +392,17 @@ export const useEditorStore = defineStore('editor', () => {
     let template = `<template>\n  <view class="page-${element.name.replace(/\s+/g, '-')}">\n`;
     
     // Recursive function to generate template
-    function generateTemplate(el: EditorElement, indent: string, parentWidth: number, parentHeight: number): string {
+    function generateTemplate(el: EditorElement, indent: string, parentWidth: number, parentHeight: number, parentType?: string): string {
       let code = '';
-      const styleString = generateStyleString(el, rootWidth, parentWidth, parentHeight);
+      const styleString = generateStyleString(el, rootWidth, parentWidth, parentHeight, parentType);
       
       if (el.type === 'text') {
         code += `${indent}<text class="element-${el.id}" style="${styleString}">${el.content}</text>\n`;
-      } else if (el.type === 'rect' || el.type === 'frame') { // Treat rect and nested frames as views
+      } else if (el.type === 'rect' || el.type === 'frame' || el.type === 'flex') { // Treat rect, flex and nested frames as views
         code += `${indent}<view class="element-${el.id}" style="${styleString}">\n`;
         if (el.children) {
           el.children.forEach(child => {
-            code += generateTemplate(child, indent + '  ', el.width, el.height);
+            code += generateTemplate(child, indent + '  ', el.width, el.height, el.type);
           });
         }
         code += `${indent}</view>\n`;
@@ -450,7 +445,7 @@ export const useEditorStore = defineStore('editor', () => {
     return template;
   }
 
-  function generateStyleString(el: EditorElement, rootWidth: number, parentWidth: number, parentHeight: number): string {
+  function generateStyleString(el: EditorElement, rootWidth: number, parentWidth: number, parentHeight: number, parentType?: string): string {
     // Helper to convert px to rpx
     const toRpx = (px: number) => {
       if (px === 0) return '0';
@@ -479,12 +474,27 @@ export const useEditorStore = defineStore('editor', () => {
     // Convert properties to CSS string
     const styles: string[] = [];
     
-    // Positioning (Absolute relative to parent)
-    styles.push(`position: absolute`);
-    styles.push(`left: ${toPercent(el.x, parentWidth)}`);
-    styles.push(`top: ${toPercent(el.y, parentHeight)}`);
-    styles.push(`width: ${toPercent(el.width, parentWidth)}`);
-    styles.push(`height: ${toPercent(el.height, parentHeight)}`);
+    // Positioning
+    if (parentType === 'flex') {
+      styles.push(`position: relative`);
+      styles.push(`width: ${toPercent(el.width, parentWidth)}`);
+      styles.push(`height: ${toPercent(el.height, parentHeight)}`);
+    } else {
+      styles.push(`position: absolute`);
+      styles.push(`left: ${toPercent(el.x, parentWidth)}`);
+      styles.push(`top: ${toPercent(el.y, parentHeight)}`);
+      styles.push(`width: ${toPercent(el.width, parentWidth)}`);
+      styles.push(`height: ${toPercent(el.height, parentHeight)}`);
+    }
+
+    if (el.type === 'flex') {
+      styles.push('display: flex');
+      if (el.style.flexDirection) styles.push(`flex-direction: ${el.style.flexDirection}`);
+      if (el.style.justifyContent) styles.push(`justify-content: ${el.style.justifyContent}`);
+      if (el.style.alignItems) styles.push(`align-items: ${el.style.alignItems}`);
+      if (el.style.flexWrap) styles.push(`flex-wrap: ${el.style.flexWrap}`);
+      if (el.style.gap) styles.push(`gap: ${el.style.gap}`);
+    }
     
     if (el.rotation) {
       styles.push(`transform: rotate(${el.rotation}deg)`);
@@ -570,6 +580,10 @@ export const useEditorStore = defineStore('editor', () => {
     selectedElementIds.value = [];
   }
 
+  function setAlignmentGuides(guides: any[]) {
+    alignmentGuides.value = guides;
+  }
+
   return {
     scale,
     offset,
@@ -581,6 +595,8 @@ export const useEditorStore = defineStore('editor', () => {
     hoveredElementId,
     isResizing,
     mouseDownOnElement,
+    alignmentGuides,
+    setAlignmentGuides,
     setTool,
     addElement,
     removeElement,

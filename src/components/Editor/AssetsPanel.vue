@@ -12,102 +12,50 @@ const basicComponents = [
   { type: 'carousel', name: '轮播图', icon: GalleryHorizontal },
 ];
 
-function addComponent(type: string) {
-  // Center of the canvas (approximate)
-  const x = -store.offset.x / store.scale + 100;
-  const y = -store.offset.y / store.scale + 100;
-  
-  const id = `${type}-${Date.now()}`;
-  
-  if (type === 'rect') {
-    store.addElement({
-      id,
-      name: `矩形 ${store.elements.length + 1}`,
-      type: 'rect',
-      x, y,
-      width: 100,
-      height: 100,
-      rotation: 0,
-      visible: true,
-      locked: false,
-      expanded: false,
-      children: [],
-      style: { fill: '#d9d9d9', opacity: 1 }
-    });
-  } else if (type === 'text') {
-    store.addElement({
-      id,
-      name: `文本 ${store.elements.length + 1}`,
-      type: 'text',
-      x, y,
-      width: 100,
-      height: 30,
-      rotation: 0,
-      visible: true,
-      locked: false,
-      expanded: false,
-      children: [],
-      content: '文本',
-      style: { fill: '#000000', fontSize: 16, fontFamily: 'Arial', opacity: 1 }
-    });
-  } else if (type === 'frame') {
-    store.addElement({
-      id,
-      name: `画框 ${store.elements.length + 1}`,
-      type: 'frame',
-      x, y,
-      width: 375,
-      height: 667,
-      rotation: 0,
-      visible: true,
-      locked: false,
-      expanded: true,
-      children: [],
-      style: { fill: '#ffffff', opacity: 1 }
-    });
-  } else if (type === 'image') {
-    alert('请直接拖拽图片到画布');
-    return;
-  } else if (type === 'carousel') {
-    store.addElement({
-      id,
-      name: `轮播图 ${store.elements.length + 1}`,
-      type: 'carousel',
-      x, y,
-      width: 300,
-      height: 200,
-      rotation: 0,
-      visible: true,
-      locked: false,
-      expanded: false,
-      children: [],
-      images: [
-        'https://via.placeholder.com/300x200/cccccc/969696?text=Slide+1',
-        'https://via.placeholder.com/300x200/aaaaaa/666666?text=Slide+2',
-        'https://via.placeholder.com/300x200/888888/333333?text=Slide+3'
-      ],
-      currentIndex: 0,
-      style: { opacity: 1 }
-    });
-  }
-  
-  if (type !== 'image') {
-    store.selectElement(id);
-  }
-}
+const containerComponents = [
+  { type: 'flex', name: 'Flex布局', icon: Box },
+];
 
 function handleDragStart(e: DragEvent, type: string) {
   e.dataTransfer?.setData('application/vizcraft-component', type);
-  e.dataTransfer!.effectAllowed = 'copy';
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'copy';
+    
+    // Create an empty image to hide the default drag ghost
+    const img = new Image();
+    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; // Transparent 1x1 pixel
+    e.dataTransfer.setDragImage(img, 0, 0);
+  }
+  // Set global variable for dragover access (since dataTransfer is protected in dragover)
+  (window as any).__draggedComponentType = type;
+}
+
+function handleDragEnd() {
+  (window as any).__draggedComponentType = null;
 }
 </script>
 
 <template>
   <div class="assets-panel">
-    <div class="panel-header">
-      基础组件
-    </div>
     <div class="panel-content">
+      <div class="section-title">容器组件</div>
+      <div class="component-grid">
+        <div 
+          v-for="item in containerComponents" 
+          :key="item.type"
+          class="component-item"
+          draggable="true"
+          @dragstart="handleDragStart($event, item.type)"
+          @dragend="handleDragEnd"
+        >
+          <div class="icon-wrapper">
+            <component :is="item.icon" :size="24" />
+          </div>
+          <span class="component-name">{{ item.name }}</span>
+        </div>
+      </div>
+
+      <div class="section-title" style="margin-top: 24px;">基础组件</div>
       <div class="component-grid">
         <div 
           v-for="item in basicComponents" 
@@ -115,7 +63,7 @@ function handleDragStart(e: DragEvent, type: string) {
           class="component-item"
           draggable="true"
           @dragstart="handleDragStart($event, item.type)"
-          @click="addComponent(item.type)"
+          @dragend="handleDragEnd"
         >
           <div class="icon-wrapper">
             <component :is="item.icon" :size="24" />
@@ -134,17 +82,19 @@ function handleDragStart(e: DragEvent, type: string) {
   height: 100%;
 }
 
-.panel-header {
+.section-title {
   height: 40px;
   display: flex;
   align-items: center;
-  padding: 0 16px;
+  /* padding: 0 16px; Remove horizontal padding as it is inside panel-content which has padding */
+  padding-bottom: 8px;
   border-bottom: 1px solid #333;
   font-weight: 600;
   font-size: 12px;
   color: #eeeeee;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  margin-bottom: 12px;
 }
 
 .panel-content {

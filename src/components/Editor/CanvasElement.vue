@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref, nextTick, onMounted, onUnmounted, watch } from 'vue';
 import { useEditorStore } from '../../stores/editor';
-import CanvasElement from './CanvasElement.vue'; // Recursive import
+import { calculateSnapping, flattenElements } from '../../utils/snapping';
+import type { SnapGuide } from '../../utils/snapping';
 import { Code } from 'lucide-vue-next';
 
 const props = defineProps<{
   element: any;
+  parent?: any;
 }>();
 
 const store = useEditorStore();
@@ -21,14 +23,8 @@ const wrapperStyle = computed(() => {
   const { x, y, width, height, rotation, style, type } = props.element;
   
   const s: any = {
-    position: 'absolute',
-    left: `${x}px`,
-    top: `${y}px`,
-    width: `${width}px`,
-    height: `${height}px`,
-    transform: `rotate(${rotation}deg)`,
     boxSizing: 'border-box',
-    border: style.stroke ? `${style.strokeWidth || 1}px solid ${style.stroke}` : 'none',
+    border: style.stroke ? `${style.strokeWidth || 1}px ${style.borderStyle || 'solid'} ${style.stroke}` : 'none',
     backgroundColor: style.fill || 'transparent',
     opacity: style.opacity ?? 1,
     borderRadius: style.borderRadius || '0px',
@@ -37,6 +33,23 @@ const wrapperStyle = computed(() => {
     borderBottomRightRadius: style.borderBottomRightRadius,
     borderBottomLeftRadius: style.borderBottomLeftRadius,
   };
+
+  if (props.parent && props.parent.type === 'flex') {
+    s.position = 'relative';
+    s.width = `${width}px`;
+    s.height = `${height}px`;
+    // Flex items usually don't support rotation via transform the same way without affecting flow, 
+    // but we'll keep it for now.
+    s.transform = `rotate(${rotation}deg)`;
+    s.flexShrink = 0; // Prevent shrinking by default
+  } else {
+    s.position = 'absolute';
+    s.left = `${x}px`;
+    s.top = `${y}px`;
+    s.width = `${width}px`;
+    s.height = `${height}px`;
+    s.transform = `rotate(${rotation}deg)`;
+  }
 
   if (type === 'frame') {
     s.backgroundColor = style.fill || '#ffffff'; 
@@ -67,7 +80,7 @@ const contentStyle = computed(() => {
     height: '100%',
   };
   
-  if (type === 'frame' || type === 'carousel') {
+  if (type === 'frame' || type === 'carousel' || type === 'flex') {
     s.overflow = 'hidden';
     
     // Apply border radius to content as well to clip children
@@ -77,6 +90,16 @@ const contentStyle = computed(() => {
     if (style.borderTopRightRadius) s.borderTopRightRadius = style.borderTopRightRadius;
     if (style.borderBottomRightRadius) s.borderBottomRightRadius = style.borderBottomRightRadius;
     if (style.borderBottomLeftRadius) s.borderBottomLeftRadius = style.borderBottomLeftRadius;
+  }
+
+  if (type === 'flex') {
+    s.display = 'flex';
+    s.flexDirection = props.element.style.flexDirection || 'row';
+    s.justifyContent = props.element.style.justifyContent || 'flex-start';
+    s.alignItems = props.element.style.alignItems || 'flex-start';
+    s.flexWrap = props.element.style.flexWrap || 'nowrap';
+    s.gap = props.element.style.gap || '0px';
+    s.padding = props.element.style.padding || '0px';
   }
   
   return s;
@@ -227,6 +250,13 @@ function onResizeMouseDown(e: MouseEvent, edge: string) {
   const startWidth = props.element.width;
   const startHeight = props.element.height;
   
+  // Calculate snap targets once at start of drag
+  const snapTargets = flattenElements(
+    store.elements, 
+    (item) => store.getGlobalPosition(item),
+    props.element.id
+  );
+  
   const handleMouseMove = (me: MouseEvent) => {
     me.preventDefault();
     me.stopPropagation();
@@ -296,6 +326,195 @@ function onResizeMouseDown(e: MouseEvent, edge: string) {
       newHeight = minSize;
     }
     
+    // Snapping Logic
+    // We need to convert local coordinates to global for snapping calculation
+    // Then convert back to local after snapping
+    
+    // 1. Get current global position of parent (if any)
+    let parentGlobalX = 0;
+    let parentGlobalY = 0;
+    if (props.parent) {
+      const parentGlobal = store.getGlobalPosition(props.parent);
+      parentGlobalX = parentGlobal.x;
+      parentGlobalY = parentGlobal.y;
+    }
+    
+    // 2. Calculate proposed global position
+    const proposedGlobalX = parentGlobalX + newX;
+    const proposedGlobalY = parentGlobalY + newY;
+    
+    // 3. Perform snapping
+    // We only snap edges that are being moved
+    // Construct a "proposed rect" for snapping
+    const snapResult = calculateSnapping(
+      { x: proposedGlobalX, y: proposedGlobalY, width: newWidth, height: newHeight },
+      snapTargets
+    );
+    
+    // 4. Apply snap adjustments only to the edges being moved
+    // Calculate how much the snap moved the rect globally
+    const snapDeltaX = snapResult.x - proposedGlobalX;
+    const snapDeltaY = snapResult.y - proposedGlobalY;
+    
+    // Apply X snap
+    if (snapDeltaX !== 0) {
+      if (edge.includes('left')) {
+        // If moving left edge, the x changes and width changes
+        newX += snapDeltaX;
+        newWidth -= snapDeltaX;
+      } else if (edge.includes('right')) {
+        // If moving right edge, only width changes (x stays same, but we need to check if right edge snapped)
+        // calculateSnapping returns new x/y for the top-left corner.
+        // But if we are resizing right, we want the right edge to snap.
+        // calculateSnapping logic snaps based on left/center/right.
+        // If the right edge snapped, snapResult.x might have changed to accommodate width?
+        // Actually calculateSnapping assumes moving the whole rect. 
+        // We need a resizing-specific snap or adapt the result.
+        
+        // Let's refine: calculateSnapping returns the new TOP-LEFT x/y that aligns BEST.
+        // If we are resizing RIGHT, we want the RIGHT edge to align.
+        // If calculateSnapping suggests a new X, it implies a shift. 
+        // But we are anchored at left.
+        
+        // Better approach: Check which guides are active and apply manually
+        // But for simplicity, let's look at the result.
+        // If we resizing right, we shouldn't change X.
+        // So we should only look at guides that affect the Right edge.
+        // But calculateSnapping is generic.
+        
+        // Let's try to infer:
+        // If resizing right, we want newWidth = snapTarget - startX
+        
+        // Re-implement simplified snapping for resize to avoid fighting the generic mover
+        
+        // Actually, let's use the guides from snapResult to determine.
+        // But snapResult.x/y is "best position". 
+        
+        // Alternative: Use snapResult.x/y but only if it matches our moving edge intent.
+        
+        // If resizing right:
+        // We want (newX + newWidth) to snap. 
+        // The generic snapper tries to snap Left, Center, Right.
+        // If it snapped Right, then snapResult.x + width (if width kept same) would align.
+        // But here width is changing.
+        
+        // Let's do a custom resize snap using the helper logic but applied to edges.
+        
+        // For now, let's just apply the delta to the moving side.
+        newWidth += snapDeltaX;
+      }
+    }
+    
+    // Re-do snapping properly for Resize
+    // We need to snap specific edges
+    
+    // --- Custom Resize Snapping ---
+    let snappedX = newX;
+    let snappedY = newY;
+    let snappedWidth = newWidth;
+    let snappedHeight = newHeight;
+    const guides: SnapGuide[] = [];
+    const threshold = 5;
+    
+    // Global edges
+    const currentGlobalLeft = parentGlobalX + newX;
+    const currentGlobalTop = parentGlobalY + newY;
+    const currentGlobalRight = currentGlobalLeft + newWidth;
+    const currentGlobalBottom = currentGlobalTop + newHeight;
+    
+    // Helper to check alignment
+    const checkAlign = (val: number, isVertical: boolean) => {
+      let bestVal = val;
+      let minDiff = threshold + 1;
+      let matchedGuide: SnapGuide | null = null;
+      
+      for (const target of snapTargets) {
+        const tLeft = target.x;
+        const tRight = target.x + target.width;
+        const tTop = target.y;
+        const tBottom = target.y + target.height;
+        const tCenter = isVertical ? target.x + target.width/2 : target.y + target.height/2;
+        
+        const compareValues = isVertical 
+          ? [tLeft, tRight, tCenter] 
+          : [tTop, tBottom, tCenter];
+          
+        for (const targetVal of compareValues) {
+          const diff = Math.abs(val - targetVal);
+          if (diff < minDiff) {
+            minDiff = diff;
+            bestVal = targetVal;
+            
+            // Create guide
+            const start = isVertical ? Math.min(currentGlobalTop, tTop) : Math.min(currentGlobalLeft, tLeft);
+            const end = isVertical ? Math.max(currentGlobalBottom, tBottom) : Math.max(currentGlobalRight, tRight);
+            
+            matchedGuide = {
+              type: isVertical ? 'vertical' : 'horizontal',
+              position: targetVal,
+              start,
+              end
+            };
+          }
+        }
+      }
+      return { val: bestVal, guide: matchedGuide, snapped: minDiff <= threshold };
+    };
+    
+    // Snap X Axis
+    if (edge.includes('left')) {
+      const res = checkAlign(currentGlobalLeft, true);
+      if (res.snapped) {
+        const delta = res.val - currentGlobalLeft;
+        snappedX += delta;
+        snappedWidth -= delta;
+        if (res.guide) guides.push(res.guide);
+      }
+    } else if (edge.includes('right')) {
+      const res = checkAlign(currentGlobalRight, true);
+      if (res.snapped) {
+        const delta = res.val - currentGlobalRight;
+        snappedWidth += delta;
+        if (res.guide) guides.push(res.guide);
+      }
+    }
+    
+    // Snap Y Axis
+    if (edge.includes('top')) {
+      const res = checkAlign(currentGlobalTop, false);
+      if (res.snapped) {
+        const delta = res.val - currentGlobalTop;
+        snappedY += delta;
+        snappedHeight -= delta;
+        if (res.guide) guides.push(res.guide);
+      }
+    } else if (edge.includes('bottom')) {
+      const res = checkAlign(currentGlobalBottom, false);
+      if (res.snapped) {
+        const delta = res.val - currentGlobalBottom;
+        snappedHeight += delta;
+        if (res.guide) guides.push(res.guide);
+      }
+    }
+    
+    // Update active guides in store or component
+    // We need to access the parent component (InfiniteCanvas) to update guides
+    // For now, we can try to emit or use a shared store state if available.
+    // InfiniteCanvas uses a local ref for guides. We might need to move guides to store.
+    // Or dispatch a custom event.
+    
+    // Let's assume we can't easily update guides visualization without store change.
+    // But the snapping effect itself (jumping to value) will work.
+    // To show guides, we should probably add `alignmentGuides` to the store.
+    
+    // Update local variables with snapped values
+    newX = snappedX;
+    newY = snappedY;
+    newWidth = snappedWidth;
+    newHeight = snappedHeight;
+    
+    // --- End Custom Resize Snapping ---
+
     // Update element directly without triggering history on every move
     const el = store.findElement(store.elements, props.element.id);
     if (el) {
@@ -303,6 +522,13 @@ function onResizeMouseDown(e: MouseEvent, edge: string) {
       el.y = newY;
       el.width = newWidth;
       el.height = newHeight;
+    }
+    
+    // Emit guides event? 
+    // Since we are inside a component, we can use an event bus or store.
+    // Let's add setGuides to store for simplicity in this refactor.
+    if (store.setAlignmentGuides) {
+        store.setAlignmentGuides(guides);
     }
   };
   
@@ -312,6 +538,11 @@ function onResizeMouseDown(e: MouseEvent, edge: string) {
     
     // Clear resize flag
     store.isResizing = false;
+    
+    // Clear guides
+    if (store.setAlignmentGuides) {
+        store.setAlignmentGuides([]);
+    }
     
     // Record final state to history
     store.updateElement(props.element.id, {
@@ -503,6 +734,7 @@ watch(() => props.element.images, () => {
         v-for="child in element.children" 
         :key="child.id" 
         :element="child" 
+        :parent="element"
       />
     </div>
 

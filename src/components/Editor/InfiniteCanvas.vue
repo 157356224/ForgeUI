@@ -3,7 +3,7 @@ import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { useEditorStore } from '../../stores/editor';
 import CanvasElement from './CanvasElement.vue';
 import { calculateSnapping, flattenElements } from '../../utils/snapping';
-import type { SnapGuide } from '../../utils/snapping';
+
 
 const store = useEditorStore();
 const canvasRef = ref<HTMLElement | null>(null);
@@ -39,7 +39,7 @@ let selectionStart = { x: 0, y: 0 };
 const selectionBox = ref<{ x: number, y: number, width: number, height: number } | null>(null);
 
 // Snapping Logic
-const alignmentGuides = ref<SnapGuide[]>([]);
+const alignmentGuides = computed(() => store.alignmentGuides);
 let snapTargets: any[] = []; // Cache for drag session
 
 function getCanvasCoordinates(e: MouseEvent) {
@@ -427,8 +427,9 @@ function handleMouseMove(e: MouseEvent) {
         }
       }
       
-      alignmentGuides.value = snapResult.guides;
+      store.setAlignmentGuides(snapResult.guides);
     }
+    e.preventDefault();
     return;
   }
 
@@ -444,7 +445,7 @@ function handleMouseMove(e: MouseEvent) {
 function handleMouseUp(e: MouseEvent) {
   isDraggingCanvas = false;
   store.mouseDownOnElement = false; // Reset flag
-  alignmentGuides.value = []; // Clear guides
+  store.setAlignmentGuides([]); // Clear guides
   snapTargets = []; // Clear cache
   
   // Handle selection box
@@ -555,7 +556,7 @@ function findHitContainer(list: any[], x: number, y: number, excludeId: string):
     if (x >= el.x && x <= el.x + el.width && y >= el.y && y <= el.y + el.height) {
       // It's a hit.
       // If it's a frame/container, check its children first
-      if (el.type === 'frame') { // Only frames are containers for now
+      if (el.type === 'frame' || el.type === 'flex') { // Only frames and flex are containers for now
         // Local coordinates for children
         const localX = x - el.x;
         const localY = y - el.y;
@@ -742,16 +743,227 @@ function handleKeyUp(e: KeyboardEvent) {
 }
 
 // Drag and Drop Image Support
+const dragPreview = ref<{
+  type: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  content?: string;
+} | null>(null);
+
 function handleDragOver(e: DragEvent) {
   e.preventDefault();
   if (e.dataTransfer) {
     e.dataTransfer.dropEffect = 'copy';
   }
+
+  const componentType = e.dataTransfer?.getData('application/vizcraft-component') || 
+                        (window as any).__draggedComponentType; // Fallback for drag data
+  
+  if (componentType) {
+    const { x, y } = getCanvasCoordinates(e);
+    let width = 100;
+    let height = 100;
+    
+    // Set dimensions based on type
+    if (componentType === 'text') {
+      width = 100;
+      height = 30;
+    } else if (componentType === 'frame') {
+      width = 375;
+      height = 667;
+    } else if (componentType === 'carousel') {
+      width = 300;
+      height = 200;
+    } else if (componentType === 'flex') {
+      width = 300;
+      height = 300;
+    }
+
+    // Center the preview on the mouse cursor
+    dragPreview.value = {
+      type: componentType,
+      x: x - width / 2,
+      y: y - height / 2,
+      width,
+      height,
+      content: componentType === 'text' ? '文本' : undefined
+    };
+  }
+}
+
+function handleDragLeave(e: DragEvent) {
+  // Only clear if we're leaving the canvas area
+  const rect = canvasRef.value?.getBoundingClientRect();
+  if (rect) {
+    const x = e.clientX;
+    const y = e.clientY;
+    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
+      dragPreview.value = null;
+    }
+  }
 }
 
 function handleDrop(e: DragEvent) {
   e.preventDefault();
+  dragPreview.value = null; // Clear preview
   
+  // Handle Component Drop
+  const componentType = e.dataTransfer?.getData('application/vizcraft-component') || 
+                        (window as any).__draggedComponentType;
+  
+  // Clear global variable
+  (window as any).__draggedComponentType = null;
+  
+  if (componentType) {
+    const { x, y } = getCanvasCoordinates(e);
+    
+    // Find parent container
+    const hitContainerId = findHitContainer(store.elements, x, y, '');
+    let parentId: string | undefined = hitContainerId || undefined;
+    
+    // Default dimensions
+    let width = 100;
+    let height = 100;
+    
+    // Set dimensions based on type
+    if (componentType === 'text') {
+      width = 100;
+      height = 30;
+    } else if (componentType === 'frame') {
+      width = 375;
+      height = 667;
+    } else if (componentType === 'carousel') {
+      width = 300;
+      height = 200;
+    } else if (componentType === 'flex') {
+      width = 300;
+      height = 300;
+    }
+
+    // Center the component on the mouse cursor
+    let finalX = x - width / 2;
+    let finalY = y - height / 2;
+    
+    // Calculate relative position if dropping into a container
+    if (parentId) {
+      const parent = store.findElement(store.elements, parentId);
+      if (parent) {
+        const parentGlobal = store.getGlobalPosition(parent);
+        finalX -= parentGlobal.x;
+        finalY -= parentGlobal.y;
+      }
+    }
+    
+    const id = `${componentType}-${Date.now()}`;
+    
+    if (componentType === 'rect') {
+      store.addElement({
+        id,
+        name: `矩形 ${store.elements.length + 1}`,
+        type: 'rect',
+        x: finalX, 
+        y: finalY,
+        width,
+        height,
+        rotation: 0,
+        visible: true,
+        locked: false,
+        expanded: false,
+        children: [],
+        style: { fill: '#d9d9d9', opacity: 1 }
+      }, parentId);
+    } else if (componentType === 'text') {
+      store.addElement({
+        id,
+        name: `文本 ${store.elements.length + 1}`,
+        type: 'text',
+        x: finalX, 
+        y: finalY,
+        width,
+        height,
+        rotation: 0,
+        visible: true,
+        locked: false,
+        expanded: false,
+        children: [],
+        content: '文本',
+        style: { fill: '#000000', fontSize: 16, fontFamily: 'Arial', opacity: 1 }
+      }, parentId);
+    } else if (componentType === 'frame') {
+      store.addElement({
+        id,
+        name: `画框 ${store.elements.length + 1}`,
+        type: 'frame',
+        x: finalX, 
+        y: finalY,
+        width,
+        height,
+        rotation: 0,
+        visible: true,
+        locked: false,
+        expanded: true,
+        children: [],
+        style: { fill: '#ffffff', opacity: 1 }
+      }, parentId);
+    } else if (componentType === 'carousel') {
+      store.addElement({
+        id,
+        name: `轮播图 ${store.elements.length + 1}`,
+        type: 'carousel',
+        x: finalX, 
+        y: finalY,
+        width,
+        height,
+        rotation: 0,
+        visible: true,
+        locked: false,
+        expanded: false,
+        children: [],
+        images: [
+          'https://via.placeholder.com/300x200/cccccc/969696?text=Slide+1',
+          'https://via.placeholder.com/300x200/aaaaaa/666666?text=Slide+2',
+          'https://via.placeholder.com/300x200/888888/333333?text=Slide+3'
+        ],
+        currentIndex: 0,
+        style: { opacity: 1 }
+      }, parentId);
+    } else if (componentType === 'flex') {
+      store.addElement({
+        id,
+        name: `Flex容器 ${store.elements.length + 1}`,
+        type: 'flex',
+        x: finalX, 
+        y: finalY,
+        width,
+        height,
+        rotation: 0,
+        visible: true,
+        locked: false,
+        expanded: true,
+        children: [],
+        style: { 
+          fill: 'transparent', 
+          stroke: '#888888',
+          strokeWidth: 1,
+          borderStyle: 'dashed',
+          opacity: 1, 
+          display: 'flex',
+          flexDirection: 'row',
+          justifyContent: 'flex-start',
+          alignItems: 'flex-start',
+          flexWrap: 'nowrap',
+          gap: '10px',
+          padding: '10px'
+        }
+      }, parentId);
+    }
+    
+    store.selectElement(id);
+    return;
+  }
+
   if (!e.dataTransfer?.files || e.dataTransfer.files.length === 0) return;
   
   const file = e.dataTransfer.files[0];
@@ -813,6 +1025,7 @@ onMounted(() => {
   // Add drag and drop listeners
   if (canvasRef.value) {
     canvasRef.value.addEventListener('dragover', handleDragOver);
+    canvasRef.value.addEventListener('dragleave', handleDragLeave);
     canvasRef.value.addEventListener('drop', handleDrop);
   }
   
@@ -829,6 +1042,7 @@ onUnmounted(() => {
   // Remove drag and drop listeners
   if (canvasRef.value) {
     canvasRef.value.removeEventListener('dragover', handleDragOver);
+    canvasRef.value.removeEventListener('dragleave', handleDragLeave);
     canvasRef.value.removeEventListener('drop', handleDrop);
   }
 });
@@ -901,6 +1115,28 @@ onUnmounted(() => {
              width: `${selectionBox.width}px`,
              height: `${selectionBox.height}px`
            }">
+      </div>
+
+      <!-- Drag Preview -->
+      <div v-if="dragPreview" class="drag-preview"
+           :style="{
+             left: `${dragPreview.x}px`,
+             top: `${dragPreview.y}px`,
+             width: `${dragPreview.width}px`,
+             height: `${dragPreview.height}px`,
+             opacity: 0.5,
+             border: '1px dashed #007acc',
+             backgroundColor: 'rgba(0, 122, 204, 0.1)',
+             position: 'absolute',
+             pointerEvents: 'none',
+             display: 'flex',
+             alignItems: 'center',
+             justifyContent: 'center',
+             color: '#007acc',
+             fontSize: '12px',
+             zIndex: 9999
+           }">
+           {{ dragPreview.type === 'text' ? 'Text' : dragPreview.type }}
       </div>
     </div>
   </div>

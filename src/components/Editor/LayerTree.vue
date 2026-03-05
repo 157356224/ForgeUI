@@ -156,8 +156,8 @@ function onDragOver(e: DragEvent) {
   } else if (y > bottomZone) {
     dropPosition.value = 'after';
   } else {
-    // Middle zone - only allow 'inside' for frames
-    if (props.element.type === 'frame') {
+    // Middle zone - only allow 'inside' for frames and flex
+    if (props.element.type === 'frame' || props.element.type === 'flex') {
       dropPosition.value = 'inside';
     } else {
       // For non-frames, prefer 'after' in middle zone
